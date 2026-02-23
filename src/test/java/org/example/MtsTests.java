@@ -3,61 +3,42 @@ package org.example;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.openqa.selenium.By;
 import org.openqa.selenium.WebDriver;
-import org.openqa.selenium.WebElement;
 import org.openqa.selenium.edge.EdgeDriver;
-import org.openqa.selenium.support.ui.ExpectedConditions;
-import org.openqa.selenium.support.ui.WebDriverWait;
 
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class MtsTests {
     private WebDriver driver;
-    private WebDriverWait wait;
+    private HomePage homePage;
 
     @BeforeEach
     public void setUp() {
         System.setProperty("webdriver.edge.driver", "src/main/resources/msedgedriver.exe");
         driver = new EdgeDriver();
         driver.manage().window().maximize();
-
         driver.manage().timeouts().implicitlyWait(10, TimeUnit.SECONDS);
-        wait = new WebDriverWait(driver, 15);
+
+        homePage = new HomePage(driver);
     }
 
     @Test
     public void testBlockTitle() {
-        driver.get("https://www.mts.by/");
-        By titleXPath = By.xpath(".//div[@class='pay__wrapper']/h2");
-        WebElement titleElement = wait.until(ExpectedConditions.visibilityOfElementLocated(titleXPath));
-
-        String actualTitle = titleElement.getText().trim();
+        homePage.open();
+        String actualTitle = homePage.getTitleText();
         String expectedTitle = "Онлайн пополнение\nбез комиссии";
         assertEquals(expectedTitle, actualTitle);
     }
 
     @Test
     public void testPartnersImages() {
-        driver.get("https://www.mts.by/");
-
-        By partnersUlXPath = By.xpath(".//div[@class='pay__partners']/ul");
-        wait.until(ExpectedConditions.presenceOfElementLocated(partnersUlXPath));
-
-        List<WebElement> images = driver.findElements(By.xpath(".//div[@class='pay__partners']/ul//img"));
-        assertEquals(5, images.size());
-
-        List<String> actualAlts = images.stream()
-                .map(img -> img.getAttribute("alt"))
-                .map(alt -> alt != null ? alt.trim() : "")
-                .collect(Collectors.toList());
-
+        homePage.open();
+        List<String> actualAlts = homePage.getPartnersAlts();
+        assertEquals(5, actualAlts.size());
         Set<String> expectedAlts = Set.of(
                 "Visa",
                 "Verified By Visa",
@@ -65,59 +46,93 @@ public class MtsTests {
                 "MasterCard Secure Code",
                 "Белкарт"
         );
-
         assertTrue(actualAlts.containsAll(expectedAlts) && expectedAlts.containsAll(actualAlts));
     }
 
     @Test
     public void testHelpLinkRedirect() {
-        driver.get("https://www.mts.by/");
-        closeCookieIfPresent();
-
-        By helpLinkXPath = By.xpath(".//a[@href='/help/poryadok-oplaty-i-bezopasnost-internet-platezhey/']");
-        WebElement helpLink = wait.until(ExpectedConditions.elementToBeClickable(helpLinkXPath));
-
-        helpLink.click();
-
+        homePage.open();
+        homePage.closeCookieIfPresent();
+        HelpPage helpPage = homePage.clickHelpLink();
         String expectedUrlPart = "/help/poryadok-oplaty-i-bezopasnost-internet-platezhey/";
-        wait.until(ExpectedConditions.urlContains(expectedUrlPart));
-
-        String currentUrl = driver.getCurrentUrl();
-        assertTrue(currentUrl.contains(expectedUrlPart));
-    }
-
-    private void closeCookieIfPresent() {
-        try {
-            By cookieButtonXPath = By.xpath(".//button[@class='btn btn_black cookie__ok']");
-            WebElement cookieButton = wait.until(ExpectedConditions.elementToBeClickable(cookieButtonXPath));
-            cookieButton.click();
-            wait.until(ExpectedConditions.invisibilityOfElementLocated(cookieButtonXPath));
-        } catch (Exception e) {
-            System.out.println("Cookie-баннер не найден или уже закрыт");
-        }
+        assertTrue(helpPage.isUrlContains(expectedUrlPart));
     }
 
     @Test
     public void testOnlinePaymentForm() {
-        driver.get("https://www.mts.by/");
-        closeCookieIfPresent();
+        homePage.open();
+        homePage.closeCookieIfPresent(); // как в оригинале
 
-        WebElement phoneField = wait.until(ExpectedConditions.visibilityOfElementLocated(By.id("connection-phone")));
-        phoneField.sendKeys("297777777");
+        homePage.fillPaymentForm("297777777", 100.00, "test.mail@mail.ru");
+        homePage.clickContinueButton();
 
-        WebElement sumField = driver.findElement(By.id("connection-sum"));
-        sumField.sendKeys("100");
+        assertTrue(homePage.isPaymentOverlayDisplayed());
+    }
 
-        WebElement emailField = driver.findElement(By.id("connection-email"));
-        emailField.sendKeys("test.mail@mail.ru");
+    @Test
+    public void testOnlinePaymentFormFullCheck() {
+        String phone = "297777777";
+        double sum = 100.00;
+        String email = "test.mail@mail.ru";
 
-        By continueButtonXPath = By.xpath(".//form[@class='pay-form opened']/button");
-        WebElement continueButton = wait.until(ExpectedConditions.elementToBeClickable(continueButtonXPath));
-        continueButton.click();
+        homePage.open();
+        homePage.closeCookieIfPresent();
+        homePage.selectPaymentTypeByJs("pay-connection");
 
-        By overlayXPath = By.xpath(".//div[@class='payment-widget-app']");
-        WebElement overlay = wait.until(ExpectedConditions.visibilityOfElementLocated(overlayXPath));
-        assertTrue(overlay.isDisplayed());
+        homePage.fillPaymentForm(phone, sum, email);
+        homePage.clickContinueButton();
+
+        assertTrue(homePage.isPaymentOverlayDisplayed());
+
+        homePage.switchToPaymentFrameIfPresent();
+
+        double amountFromSpan = homePage.getPaymentAmountFromOverlay();
+        double amountFromButton = homePage.getPaymentButtonAmount();
+        assertEquals(sum, amountFromSpan);
+        assertEquals(sum, amountFromButton);
+
+        String expectedPhone = "375" + phone;
+        String phoneText = homePage.getDisplayedPhone();
+        assertTrue(phoneText.contains(expectedPhone));
+
+        List<String> labels = homePage.getCardFieldLabels();
+        List<String> expectedLabels = List.of(
+                "Номер карты",
+                "Срок действия",
+                "CVC",
+                "Имя и фамилия на карте"
+        );
+        assertTrue(labels.containsAll(expectedLabels));
+
+        List<String> icons = homePage.getAllCardIconsSrc();
+        assertTrue(icons.stream().anyMatch(s -> s.contains("visa-system")));
+        assertTrue(icons.stream().anyMatch(s -> s.contains("mastercard-system")));
+        assertTrue(icons.stream().anyMatch(s -> s.contains("belkart-system")));
+        assertTrue(icons.stream().anyMatch(s -> s.contains("maestro-system")));
+        assertTrue(icons.stream().anyMatch(s -> s.contains("mir-system")));
+    }
+
+    @Test
+    public void testAllPaymentFormsPlaceholders() {
+        homePage.open();
+        homePage.closeCookieIfPresent();
+
+        Map<String, List<String>> expectedData = Map.of(
+                "pay-connection", List.of("Номер телефона", "Сумма", "E-mail для отправки чека"),
+                "pay-internet", List.of("Номер абонента", "Сумма", "E-mail для отправки чека"),
+                "pay-instalment", List.of("Номер счета на 44", "Сумма", "E-mail для отправки чека"),
+                "pay-arrears", List.of("Номер счета на 2073", "Сумма", "E-mail для отправки чека")
+        );
+
+        for (String formId : expectedData.keySet()) {
+
+            homePage.selectPaymentTypeByJs(formId);
+
+            List<String> actual = homePage.getFormPlaceholders(formId);
+            List<String> expected = expectedData.get(formId);
+
+            assertEquals(expected, actual);
+        }
     }
 
     @AfterEach
